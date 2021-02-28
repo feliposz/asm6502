@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 enum address_mode
@@ -278,10 +279,8 @@ void init()
     init_opcode(0x28, "PLP", 1, address_mode_imp);
 }
 
-int main(int argc, char *argv[])
+void disasm_test()
 {
-    init();
-
     //unsigned char example[] = { 0xa9, 0xc0, 0xaa, 0xe8, 0x69, 0xc4, 0x00 };
     //unsigned char example[] = { 0xa9, 0x00, 0x8d, 0x00, 0x02, 0xa9, 0x01, 0x8d, 0x01, 0x02, 0x8d, 0xff, 0x05 };
     //unsigned char example[] = { 0xa9, 0x80, 0x85, 0x01, 0x65, 0x01, 0xa9, 0xf1, 0xaa, 0xa9, 0xf2, 0xa8, 0xa9, 0x00, 0x98, 0x8a };
@@ -295,7 +294,161 @@ int main(int argc, char *argv[])
     unsigned char example[] = { 0x20, 0x06, 0x06, 0x20, 0x37, 0x06, 0x20, 0x0d, 0x06, 0x20, 0x2a, 0x06, 0x60, 0xa9, 0x02, 0x85, 0x02, 0xa9, 0x04, 0x85, 0x03, 0xa9, 0x11, 0x85, 0x10, 0xa9, 0x10, 0x85, 0x12, 0xa9, 0x0f, 0x85, 0x14, 0xa9, 0x04, 0x85, 0x11, 0x85, 0x13, 0x85, 0x15, 0x60, 0xa5, 0xfe, 0x85, 0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01, 0x20, 0x57, 0x06, 0x20, 0x43, 0x06, 0x20, 0x4a, 0x06, 0x4c, 0x37, 0x06, 0xa0, 0x00, 0xa5, 0xfe, 0x91, 0x00, 0x60, 0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10, 0x60, 0xa6, 0x03, 0xca, 0x8a, 0xb5, 0x10, 0x95, 0x12, 0xca, 0x10, 0xf9, 0xa5, 0x02, 0x4a, 0xb0, 0x09, 0x4a, 0xb0, 0x19, 0x4a, 0xb0, 0x1f, 0x4a, 0xb0, 0x2f, 0xa5, 0x10, 0x38, 0xe9, 0x20, 0x85, 0x10, 0x90, 0x01, 0x60, 0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11, 0xf0, 0x26, 0x60, 0xe6, 0x10, 0xa9, 0x1f, 0x24, 0x10, 0xf0, 0x1d, 0x60, 0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10, 0xb0, 0x01, 0x60, 0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, 0xf0, 0x0a, 0x60, 0xc6, 0x10, 0xa9, 0x1f, 0x25, 0x10, 0xf0, 0x01, 0x60, 0x4c, 0xab, 0x06 };
 
     disasm_program(example, sizeof(example), 0x600);
-    
+}
+
+/* label: mnemonic arg1, arg2 ; comment */
+
+struct parsed_line
+{
+    char label[100];
+    char op[100];
+    char arg1[100];
+    char arg2[100];
+};
+
+void parse_line(const char *line, int length, parsed_line *parsed)
+{
+    int pos = 0;
+    int startToken = 0;
+    int endToken = 0;
+    bool inToken = false;
+
+    parsed->label[0] = 0;
+    parsed->op[0] = 0;
+    parsed->arg1[0] = 0;
+    parsed->arg2[0] = 0;
+
+    while (pos < length)
+    {
+        bool label = false;
+
+        if (line[pos] == ' ' || line[pos] == '\t')
+        {
+            if (inToken)
+            {
+                endToken = pos;
+            }
+            else
+            {
+                startToken = endToken = pos + 1;
+            }
+        }
+        else if (line[pos] == ';') // comments
+        {
+            endToken = pos;
+            pos = length; // ignore rest of line
+        }
+        else if (line[pos] == ':') // label
+        {
+            endToken = pos;
+            label = true;
+        }
+        else if (line[pos] == ',') // split arguments
+        {
+            endToken = pos++;
+        }
+        else if (pos == length - 1) // reached end of line
+        {
+            endToken = pos + 1;
+        }
+        else if (!inToken)
+        {
+            startToken = pos;
+            inToken = true;
+        }
+
+        pos++;
+
+        int length = endToken - startToken;
+        if (length > 0)
+        {
+            if (label && !parsed->label[0])
+            {
+                strncpy_s(parsed->label, sizeof(parsed->label), line + startToken, length);
+                parsed->label[length] = 0;
+            }
+            else if (!parsed->op[0])
+            {
+                strncpy_s(parsed->op, sizeof(parsed->op), line + startToken, length);
+                parsed->op[length] = 0;
+            }
+            else if (!parsed->arg1[0])
+            {
+                strncpy_s(parsed->arg1, sizeof(parsed->arg1), line + startToken, length);
+                parsed->arg1[length] = 0;
+            }
+            else if (!parsed->arg2[0])
+            {
+                strncpy_s(parsed->arg2, sizeof(parsed->arg1), line + startToken, length);
+                parsed->arg2[length] = 0;
+            }
+            else
+            {
+                assert(!"unexpected token");
+            }
+
+            startToken = endToken = pos;
+            inToken = false;
+        }
+    }
+
+    printf("L: %s   OP: %s   A1: %s   A2: %s\n", parsed->label, parsed->op, parsed->arg1, parsed->arg2);
+}
+
+void asm_program(const char *program)
+{
+    const char *c = program;
+    const char *line = c;
+    parsed_line parsed;
+    int length = 0;
+    while (*c)
+    {
+        if (*c == '\n' || *c == '\r')
+        {
+            if (length > 0)
+            {
+                parse_line(line, length, &parsed);
+            }
+            line = c + 1;
+            length = 0;
+        }
+        else
+        {
+            length++;
+        }
+        c++;
+    }
+    parse_line(line, length, &parsed);
+}
+
+void asm_test()
+{
+    const char *program =
+        "; static noise\n"
+        "\n"
+        "start: ldy #$ff\n\r"
+        "       ldx\t#$0\n"
+        "loop:  lda $fe\n"
+        "   \t    sta $200  ,  x\n"
+        "       and #$7\n"
+        "       sta $300, x\r"
+        "       and #$3\n"
+        "       sta $400 ,x\n"
+        "      and   #$1\n"
+        "       sta $500,x\n"
+        "       inx\n"
+        "       dey\n"
+        "       bne loop\n"
+        "       rts";
+
+    asm_program(program);
+}
+
+int main(int argc, char *argv[])
+{
+    init();
+
+    asm_test();
 
     system("pause");
     return 0;
