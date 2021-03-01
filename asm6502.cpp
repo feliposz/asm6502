@@ -8,15 +8,15 @@ enum address_mode
     address_mode_acc, // can merge with imp?
     address_mode_imp,
     address_mode_imm,
-    address_mode_zp, 
+    address_mode_zp,
     address_mode_zp_x,
-    address_mode_zp_y, 
+    address_mode_zp_y,
     address_mode_rel,
-    address_mode_abs, 
+    address_mode_abs,
     address_mode_abs_x,
     address_mode_abs_y,
     address_mode_ind,
-    address_mode_ind_x, 
+    address_mode_ind_x,
     address_mode_ind_y,
 };
 
@@ -31,8 +31,8 @@ opcode opcodes[256];
 
 inline void init_opcode(int id, const char *mnemonic, int length, address_mode mode)
 {
-    opcodes[id].mnemonic = mnemonic; 
-    opcodes[id].length = length; 
+    opcodes[id].mnemonic = mnemonic;
+    opcodes[id].length = length;
     opcodes[id].mode = mode;
 }
 
@@ -73,7 +73,7 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
         case address_mode_abs_y:
             printf("%s $%04X,Y\n", mnemonic, word);
             break;
-        case address_mode_imp:            
+        case address_mode_imp:
             printf("%s\n", mnemonic);
             break;
         case address_mode_acc:
@@ -296,8 +296,6 @@ void disasm_test()
     disasm_program(example, sizeof(example), 0x600);
 }
 
-/* label: mnemonic arg1, arg2 ; comment */
-
 struct parsed_line
 {
     char label[100];
@@ -347,6 +345,11 @@ void parse_line(const char *line, int length, parsed_line *parsed)
         {
             endToken = pos++;
         }
+        else if (line[pos] == '=') // *=offset
+        {
+            endToken = pos;
+            // TODO: check syntax
+        }
         else if (pos == length - 1) // reached end of line
         {
             endToken = pos + 1;
@@ -362,24 +365,30 @@ void parse_line(const char *line, int length, parsed_line *parsed)
         int length = endToken - startToken;
         if (length > 0)
         {
+            const char *token = line + startToken;
             if (label && !parsed->label[0])
             {
-                strncpy_s(parsed->label, sizeof(parsed->label), line + startToken, length);
+                strncpy_s(parsed->label, sizeof(parsed->label), token, length);
                 parsed->label[length] = 0;
             }
             else if (!parsed->op[0])
             {
-                strncpy_s(parsed->op, sizeof(parsed->op), line + startToken, length);
+                strncpy_s(parsed->op, sizeof(parsed->op), token, length);
                 parsed->op[length] = 0;
+                if (_stricmp(parsed->op, "DCB") == 0)
+                {
+                    // TODO: parse line data and return as arg1?
+                    assert(!"not implemented");
+                }
             }
             else if (!parsed->arg1[0])
             {
-                strncpy_s(parsed->arg1, sizeof(parsed->arg1), line + startToken, length);
+                strncpy_s(parsed->arg1, sizeof(parsed->arg1), token, length);
                 parsed->arg1[length] = 0;
             }
             else if (!parsed->arg2[0])
             {
-                strncpy_s(parsed->arg2, sizeof(parsed->arg1), line + startToken, length);
+                strncpy_s(parsed->arg2, sizeof(parsed->arg1), token, length);
                 parsed->arg2[length] = 0;
             }
             else
@@ -391,23 +400,140 @@ void parse_line(const char *line, int length, parsed_line *parsed)
             inToken = false;
         }
     }
-
-    printf("L: %s   OP: %s   A1: %s   A2: %s\n", parsed->label, parsed->op, parsed->arg1, parsed->arg2);
 }
 
-void asm_program(const char *program)
+struct symbol
+{
+    char *label;
+    int start;
+    int end;
+    symbol *next;
+};
+
+symbol *labels = 0;
+symbol *defines = 0;
+
+// TODO: check for duplicate labels
+
+symbol *add_symbol(symbol *list, char *text, int start, int end = -1)
+{
+    symbol *s = (symbol *)malloc(sizeof(text));
+    size_t size = strlen(text) + 1;
+    s->label = (char *)malloc(size);
+    strcpy_s(s->label, size, text);
+    s->start = start;
+    if (end >= 0)
+    {
+        s->end = end;
+    }
+    else
+    {
+        if (list)
+        {
+            list->end = start - 1; // set end offset of previous label
+        }
+    }
+    s->next = list;
+    return s;
+}
+
+void print_symbols(symbol *list)
+{
+    for (symbol *s = list; s; s = s->next)
+    {
+        printf("%04x-%04x    %s\n", s->start, s->end, s->label);
+    }
+}
+
+int parse_value(char *text)
+{
+    int value = 0;
+    if (*text == '$')
+    {
+        text++; // skip hex prefix
+        for (;;)
+        {
+            if ((*text >= '0') && (*text <= '9'))
+            {
+                value = value * 16 + (*text - '0');
+                text++;
+            }
+            else if ((*text >= 'A') && (*text <= 'F'))
+            {
+                value = value * 16 + (*text - 'A' + 10);
+                text++;
+            }
+            else if ((*text >= 'a') && (*text <= 'f'))
+            {
+                value = value * 16 + (*text - 'a' + 10);
+                text++;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+    else
+    {
+        for (;;)
+        {
+            if ((*text >= '0') && (*text <= '9'))
+            {
+                value = value * 10 + (*text - '0');
+                text++;
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+    return value;
+}
+
+void index_labels(const char *program)
 {
     const char *c = program;
     const char *line = c;
     parsed_line parsed;
     int length = 0;
-    while (*c)
+    int address = 0;
+    for (;;)
     {
-        if (*c == '\n' || *c == '\r')
+        if (*c == '\n' || *c == '\r' || *c == 0)
         {
             if (length > 0)
             {
                 parse_line(line, length, &parsed);
+                if (_stricmp(parsed.op, "DEFINE") == 0)
+                {
+                    int value = parse_value(parsed.arg2);
+                    defines = add_symbol(defines, parsed.arg1, value, value);
+                }
+                else
+                {
+                    if (strlen(parsed.label) > 0)
+                    {
+                        labels = add_symbol(labels, parsed.label, address);
+                    }
+                    if (strlen(parsed.op) > 0)
+                    {
+                        if (parsed.op[0] == '*')
+                        {
+                            address = parse_value(parsed.arg1);
+                        }
+                        else
+                        {
+                            // TODO: advance address properly
+                            address++;
+                        }
+                    }
+                }
+            }
+            if (*c == 0)
+            {
+                break;
             }
             line = c + 1;
             length = 0;
@@ -418,7 +544,50 @@ void asm_program(const char *program)
         }
         c++;
     }
-    parse_line(line, length, &parsed);
+    if (labels)
+    {
+        labels->end = address;
+    }
+}
+
+void translate_program(const char *program)
+{
+    const char *c = program;
+    const char *line = c;
+    parsed_line parsed;
+    int length = 0;
+    for (;;)
+    {
+        if (*c == '\n' || *c == '\r' || *c == 0)
+        {
+            if (length > 0)
+            {
+                parse_line(line, length, &parsed);
+                printf("L: %s   OP: %s   A1: %s   A2: %s\n", parsed.label, parsed.op, parsed.arg1, parsed.arg2);
+            }
+            if (*c == 0)
+            {
+                break;
+            }
+            line = c + 1;
+            length = 0;
+        }
+        else
+        {
+            length++;
+        }
+        c++;
+    }
+}
+
+void asm_program(const char *program)
+{
+    index_labels(program);
+    //translate_program(program);
+    printf("\nDEFINES\n=======\n");
+    print_symbols(defines);
+    printf("\nLABELS\n=======\n");
+    print_symbols(labels);
 }
 
 void asm_test()
@@ -426,11 +595,13 @@ void asm_test()
     const char *program =
         "; static noise\n"
         "\n"
+        "define symbol 123\n"
         "start: ldy #$ff\n\r"
         "       ldx\t#$0\n"
         "loop:  lda $fe\n"
         "   \t    sta $200  ,  x\n"
         "       and #$7\n"
+        "define another $123\n"
         "       sta $300, x\r"
         "       and #$3\n"
         "       sta $400 ,x\n"
@@ -439,7 +610,13 @@ void asm_test()
         "       inx\n"
         "       dey\n"
         "       bne loop\n"
-        "       rts";
+        "       rts\n"
+        "*=512\n"
+        "offset512:"
+        "*=$400\n"
+        "offsetx400:"
+        //"label: dcb 12,34,56"
+        ;
 
     asm_program(program);
 }
