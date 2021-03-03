@@ -5,6 +5,7 @@
 
 enum address_mode
 {
+    address_mode_undef,
     address_mode_acc, // can merge with imp?
     address_mode_imp,
     address_mode_imm,
@@ -300,8 +301,7 @@ struct parsed_line
 {
     char label[100];
     char op[100];
-    char arg1[100];
-    char arg2[100];
+    char args[100];
 };
 
 void parse_line(const char *line, int length, parsed_line *parsed)
@@ -310,25 +310,28 @@ void parse_line(const char *line, int length, parsed_line *parsed)
     int startToken = 0;
     int endToken = 0;
     bool inToken = false;
+    bool parsedOp = false;
 
     parsed->label[0] = 0;
     parsed->op[0] = 0;
-    parsed->arg1[0] = 0;
-    parsed->arg2[0] = 0;
+    parsed->args[0] = 0;
 
-    while (pos < length)
+    while (pos <= length)
     {
         bool label = false;
 
         if (line[pos] == ' ' || line[pos] == '\t')
         {
-            if (inToken)
+            if (!parsedOp)
             {
-                endToken = pos;
-            }
-            else
-            {
-                startToken = endToken = pos + 1;
+                if (inToken)
+                {
+                    endToken = pos;
+                }
+                else
+                {
+                    startToken = endToken = pos + 1;
+                }
             }
         }
         else if (line[pos] == ';') // comments
@@ -340,10 +343,6 @@ void parse_line(const char *line, int length, parsed_line *parsed)
         {
             endToken = pos;
             label = true;
-        }
-        else if (line[pos] == ',') // split arguments
-        {
-            endToken = pos++;
         }
         else if (line[pos] == '=') // *=offset
         {
@@ -380,16 +379,12 @@ void parse_line(const char *line, int length, parsed_line *parsed)
                     // TODO: parse line data and return as arg1?
                     assert(!"not implemented");
                 }
+                parsedOp = true;
             }
-            else if (!parsed->arg1[0])
+            else if (!parsed->args[0])
             {
-                strncpy_s(parsed->arg1, sizeof(parsed->arg1), token, length);
-                parsed->arg1[length] = 0;
-            }
-            else if (!parsed->arg2[0])
-            {
-                strncpy_s(parsed->arg2, sizeof(parsed->arg1), token, length);
-                parsed->arg2[length] = 0;
+                strncpy_s(parsed->args, sizeof(parsed->args), token, length);
+                parsed->args[length] = 0;
             }
             else
             {
@@ -445,7 +440,7 @@ void print_symbols(symbol *list)
     }
 }
 
-int parse_value(char *text)
+int parse_value(const char *text)
 {
     int value = 0;
     if (*text == '$')
@@ -492,6 +487,155 @@ int parse_value(char *text)
     return value;
 }
 
+address_mode get_address_mode(const char *args, int *ptr_address)
+{
+    address_mode mode = address_mode_undef;
+    int address = 0;
+    const char *c = args;
+
+#define _skip_spaces while ((*c == ' ') || (*c == '\t')) {c++;}
+
+    _skip_spaces;
+
+    if (*c == 0)
+    {
+        mode = address_mode_imp;
+    }
+    else if (((c[0] == 'A') || (c[0] == 'a')) && c[1] == 0)
+    {
+        mode = address_mode_acc;
+        c++;
+    }
+    else if (*c == '#')
+    {
+        mode = address_mode_imm;
+        c++;
+    }
+    else if (*c == '(')
+    {
+        mode = address_mode_ind;
+        c++;
+    }
+    else
+    {
+        mode = address_mode_abs;
+    }
+
+    _skip_spaces;
+
+    if (*c == '$')
+    {
+        address = parse_value(c);
+        *c++;
+        while (((*c >= '0') && (*c <= '9')) || ((*c >= 'A') && (*c <= 'F')) || ((*c >= 'a') && (*c <= 'f')))
+        {
+            c++;
+        }
+    }
+    else if ((*c >= '0') && (*c <= '9'))
+    {
+        address = parse_value(c);
+        while ((*c >= '0') && (*c <= '9'))
+        {
+            c++;
+        }
+    }
+    else
+    {
+        bool label_end = false;
+        if (*c == '<')
+        {
+            c++;
+        }
+        else if (*c == '>')
+        {
+            label_end = true;
+            c++;
+        }
+        // TODO: implement symbol lookup
+        address = 0xDEAD;
+        while ((*c == '_') || ((*c >= 'A') && (*c <= 'Z')) || ((*c >= 'a') && (*c <= 'z')))
+        {
+            c++;
+        }
+    }
+
+    _skip_spaces
+
+        if (*c == ')')
+        {
+            c++;
+            _skip_spaces
+                if (*c == ',')
+                {
+                    c++;
+                    _skip_spaces
+                        if (*c == 'y')
+                        {
+                            mode = address_mode_ind_y;
+                            *c++;
+                        }
+                }
+        }
+
+    if (*c == ',')
+    {
+        c++;
+        _skip_spaces;
+        if ((*c == 'x') && (mode == address_mode_ind))
+        {
+            mode = address_mode_ind_x;
+            c++;
+            _skip_spaces;
+            assert(*c == ')');
+            c++;
+        }
+        else if ((*c == 'x') && (mode == address_mode_abs))
+        {
+            mode = address_mode_abs_x;
+            c++;
+        }
+        else if ((*c == 'y') && (mode == address_mode_abs))
+        {
+            mode = address_mode_abs_y;
+            c++;
+        }
+        else
+        {
+            assert(!"invalid mode");
+        }
+    }
+
+    _skip_spaces;
+
+    assert(*c == 0);
+
+    if (address <= 0xFF)
+    {
+        if (mode == address_mode_abs)
+        {
+            mode = address_mode_zp;
+        }
+        else if (mode == address_mode_abs_x)
+        {
+            mode = address_mode_zp_x;
+        }
+        else if (mode == address_mode_abs_y)
+        {
+            mode = address_mode_zp_y;
+        }
+    }
+
+    assert(mode != address_mode_undef);
+    assert(address <= 0xFFFF);
+
+    if (ptr_address)
+    {
+        *ptr_address = address;
+    }
+    return mode;
+}
+
 void index_labels(const char *program)
 {
     const char *c = program;
@@ -508,8 +652,20 @@ void index_labels(const char *program)
                 parse_line(line, length, &parsed);
                 if (_stricmp(parsed.op, "DEFINE") == 0)
                 {
-                    int value = parse_value(parsed.arg2);
-                    defines = add_symbol(defines, parsed.arg1, value, value);
+                    // special case, split symbol and value
+                    int pos = 0;
+                    int len = strlen(parsed.args);
+                    for (int i = 0; i < len; i++)
+                    {
+                        if ((parsed.args[i] == ' ') || (parsed.args[i] == '\t'))
+                        {
+                            pos = i;
+                            break;
+                        }
+                    }
+                    int value = parse_value(parsed.args + pos + 1);
+                    parsed.args[pos] = 0;
+                    defines = add_symbol(defines, parsed.args, value, value);
                 }
                 else
                 {
@@ -521,11 +677,12 @@ void index_labels(const char *program)
                     {
                         if (parsed.op[0] == '*')
                         {
-                            address = parse_value(parsed.arg1);
+                            address = parse_value(parsed.args);
                         }
                         else
                         {
                             // TODO: advance address properly
+                            address_mode mode = get_address_mode(parsed.args, nullptr);
                             address++;
                         }
                     }
@@ -563,7 +720,15 @@ void translate_program(const char *program)
             if (length > 0)
             {
                 parse_line(line, length, &parsed);
-                printf("L: %s   OP: %s   A1: %s   A2: %s\n", parsed.label, parsed.op, parsed.arg1, parsed.arg2);
+                if (_stricmp(parsed.op, "DEFINE") == 0)
+                {
+                    // skip
+                }
+                else if (parsed.op[0] != '*')
+                {
+                    address_mode mode = get_address_mode(parsed.args, nullptr);
+                    printf("L: %-10.10s   OP: %-10.10s   MODE: %2d   ARGS: %s   \n", parsed.label, parsed.op, mode, parsed.args);
+                }
             }
             if (*c == 0)
             {
@@ -583,7 +748,7 @@ void translate_program(const char *program)
 void asm_program(const char *program)
 {
     index_labels(program);
-    //translate_program(program);
+    translate_program(program);
     printf("\nDEFINES\n=======\n");
     print_symbols(defines);
     printf("\nLABELS\n=======\n");
@@ -592,6 +757,7 @@ void asm_program(const char *program)
 
 void asm_test()
 {
+#if 0
     const char *program =
         "; static noise\n"
         "\n"
@@ -617,7 +783,28 @@ void asm_test()
         "offsetx400:"
         //"label: dcb 12,34,56"
         ;
+#else
+    const char *program =
+        "XXX #$FFFF\n"
+        "XXX #9999\n"
+        "XXX #<label\n"
+        "XXX #>label\n"
+        "XXX #symbol\n"
+        "XXX $FFFF\n"
+        "XXX $0,x \n"
+        "XXX $FFFF ,x\n"
+        "XXX $FFFF,y\n"
+        "XXX ($0 ),y\n"
+        "XXX ($0,x)\n"
+        "XXX (label ) , y\n"
+        "XXX (label , x)\n"
+        "XXX 9999\n"
+        "XXX label\n"
+        "XXX label,x\n"
+        "XXX label,y\n"
+        "XXX a\n";
 
+#endif
     asm_program(program);
 }
 
