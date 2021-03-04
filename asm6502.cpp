@@ -432,6 +432,30 @@ symbol *add_symbol(symbol *list, char *text, int start, int end = -1)
     return s;
 }
 
+#define INVALID_ADDRESS 0xDEADFF
+
+int lookup_symbol(symbol *list, const char *text, bool end)
+{
+    for (symbol *s = list; s; s = s->next)
+    {
+        if (_stricmp(text, s->label) == 0)
+        {
+            return end ? s->end : s->start;
+        }
+    }
+    return INVALID_ADDRESS;
+}
+
+int lookup(const char *text, bool end)
+{
+    int address = lookup_symbol(defines, text, end);
+    if (address == INVALID_ADDRESS)
+    {
+        address = lookup_symbol(labels, text, end);
+    }
+    return address;
+}
+
 void print_symbols(symbol *list)
 {
     for (symbol *s = list; s; s = s->next)
@@ -552,31 +576,35 @@ address_mode get_address_mode(const char *args, int *ptr_address)
             label_end = true;
             c++;
         }
-        // TODO: implement symbol lookup
-        address = 0xDEAD;
+        if (ptr_address && *c)
+        {
+            // TODO: actually copy label before lookup
+            address = lookup(c, label_end);
+            assert(address != INVALID_ADDRESS);
+        }
         while ((*c == '_') || ((*c >= 'A') && (*c <= 'Z')) || ((*c >= 'a') && (*c <= 'z')))
         {
             c++;
         }
     }
 
-    _skip_spaces
+    _skip_spaces;
 
-        if (*c == ')')
+    if (*c == ')')
+    {
+        c++;
+        _skip_spaces;
+        if (*c == ',')
         {
             c++;
-            _skip_spaces
-                if (*c == ',')
-                {
-                    c++;
-                    _skip_spaces
-                        if (*c == 'y')
-                        {
-                            mode = address_mode_ind_y;
-                            *c++;
-                        }
-                }
+            _skip_spaces;
+            if (*c == 'y')
+            {
+                mode = address_mode_ind_y;
+                *c++;
+            }
         }
+    }
 
     if (*c == ',')
     {
@@ -609,22 +637,6 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     _skip_spaces;
 
     assert(*c == 0);
-
-    if (address <= 0xFF)
-    {
-        if (mode == address_mode_abs)
-        {
-            mode = address_mode_zp;
-        }
-        else if (mode == address_mode_abs_x)
-        {
-            mode = address_mode_zp_x;
-        }
-        else if (mode == address_mode_abs_y)
-        {
-            mode = address_mode_zp_y;
-        }
-    }
 
     assert(mode != address_mode_undef);
     assert(address <= 0xFFFF);
@@ -707,12 +719,59 @@ void index_labels(const char *program)
     }
 }
 
-void translate_program(const char *program)
+int translate_instruction(const char *op, address_mode mode, int current_address, int parsed_address, unsigned char *out)
+{
+    for (int id = 0; id < 256; id++)
+    {
+        if (_stricmp(opcodes[id].mnemonic, op) == 0)
+        {
+            // special case: branch instructions have relative addressing
+            if ((opcodes[id].mode == address_mode_rel) && (mode == address_mode_abs))
+            {
+                mode = address_mode_rel;
+                parsed_address -= current_address;
+            }
+            else if (parsed_address <= 0xFF)
+            {
+                if (mode == address_mode_abs)
+                {
+                    mode = address_mode_zp;
+                }
+                else if (mode == address_mode_abs_x)
+                {
+                    mode = address_mode_zp_x;
+                }
+                else if (mode == address_mode_abs_y)
+                {
+                    mode = address_mode_zp_y;
+                }
+            }
+            if (opcodes[id].mode == mode)
+            {
+                out[0] = id;
+                if (opcodes[id].length == 2)
+                {
+                    out[1] = parsed_address & 0xFF;
+                }
+                else if (opcodes[id].length == 3)
+                {
+                    out[1] = parsed_address & 0xFF;
+                    out[2] = (parsed_address >> 8) & 0xFF;
+                }
+                return opcodes[id].length;
+            }
+        }
+    }
+    assert(!"invalid op/mode");
+}
+
+int translate_program(const char *program, unsigned char *bytes)
 {
     const char *c = program;
     const char *line = c;
     parsed_line parsed;
     int length = 0;
+    int offset = 0;
     for (;;)
     {
         if (*c == '\n' || *c == '\r' || *c == 0)
@@ -724,10 +783,11 @@ void translate_program(const char *program)
                 {
                     // skip
                 }
-                else if (parsed.op[0] != '*')
+                else if (parsed.op[0] != '*' && parsed.op[0])
                 {
-                    address_mode mode = get_address_mode(parsed.args, nullptr);
-                    printf("L: %-10.10s   OP: %-10.10s   MODE: %2d   ARGS: %s   \n", parsed.label, parsed.op, mode, parsed.args);
+                    int address;
+                    address_mode mode = get_address_mode(parsed.args, &address);
+                    offset += translate_instruction(parsed.op, mode, offset, address, bytes + offset);
                 }
             }
             if (*c == 0)
@@ -743,21 +803,23 @@ void translate_program(const char *program)
         }
         c++;
     }
+    return offset;
 }
 
-void asm_program(const char *program)
+int asm_program(const char *program, unsigned char *bytes)
 {
     index_labels(program);
-    translate_program(program);
     printf("\nDEFINES\n=======\n");
     print_symbols(defines);
     printf("\nLABELS\n=======\n");
     print_symbols(labels);
+    printf("\nDISASM\n=======\n");
+    return translate_program(program, bytes);
 }
 
 void asm_test()
 {
-#if 0
+#if 1
     const char *program =
         "; static noise\n"
         "\n"
@@ -805,7 +867,9 @@ void asm_test()
         "XXX a\n";
 
 #endif
-    asm_program(program);
+    unsigned char *bytes = (unsigned char *)malloc(0x10000);
+    int size = asm_program(program, bytes);
+    disasm_program(bytes, size, 0x600);
 }
 
 int main(int argc, char *argv[])
