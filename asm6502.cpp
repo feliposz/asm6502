@@ -299,102 +299,87 @@ void disasm_test()
 
 struct parsed_line
 {
-    char label[100];
-    char op[100];
-    char args[100];
+    char label[64];
+    char op[64];
+    char args[256];
 };
 
 void parse_line(const char *line, int length, parsed_line *parsed)
 {
-    int pos = 0;
-    int startToken = 0;
-    int endToken = 0;
-    bool inToken = false;
-    bool parsedOp = false;
+    int start, end, pos = 0;
 
-    parsed->label[0] = 0;
-    parsed->op[0] = 0;
-    parsed->args[0] = 0;
+    memset(parsed, 0, sizeof(parsed_line));
 
-    while (pos <= length)
+    while ((line[pos] == ' ') || (line[pos] == '\t'))
     {
-        bool label = false;
+        pos++;
+    }
 
-        if (line[pos] == ' ' || line[pos] == '\t')
-        {
-            if (!parsedOp)
-            {
-                if (inToken)
-                {
-                    endToken = pos;
-                }
-                else
-                {
-                    startToken = endToken = pos + 1;
-                }
-            }
-        }
-        else if (line[pos] == ';') // comments
-        {
-            endToken = pos;
-            pos = length; // ignore rest of line
-        }
-        else if (line[pos] == ':') // label
-        {
-            endToken = pos;
-            label = true;
-        }
-        else if (line[pos] == '=') // *=offset
-        {
-            endToken = pos;
-            // TODO: check syntax
-        }
-        else if (pos == length - 1) // reached end of line
-        {
-            endToken = pos + 1;
-        }
-        else if (!inToken)
-        {
-            startToken = pos;
-            inToken = true;
-        }
+    // special case - set address *=$12AB
+    if ((line[pos] == '*') && (line[pos + 1] == '='))
+    {
+        parsed->op[0] = '*';
+        pos += 2;
+        start = pos;
 
+        while ((line[pos] != ';') && (line[pos] != '\n') && (line[pos] != '\r') && (line[pos] != 0))
+        {
+            pos++;
+        }
+        end = pos;
+
+        strncpy_s(parsed->args, sizeof(parsed->args), &line[start], end - start);
+        return;
+    }
+
+    start = pos;
+    while ((line[pos] == '_') || ((line[pos] >= 'A') && (line[pos] <= 'Z')) || ((line[pos] >= 'a') && (line[pos] <= 'z')) || ((line[pos] >= '0') && (line[pos] <= '9')))
+    {
+        pos++;
+    }
+    end = pos;
+
+    while ((line[pos] == ' ') || (line[pos] == '\t'))
+    {
+        pos++;
+    }
+
+    if (line[pos] != ':')
+    {
+        strncpy_s(parsed->op, sizeof(parsed->op), &line[start], end - start);
+    }
+    else
+    {
+        strncpy_s(parsed->label, sizeof(parsed->label), &line[start], end - start);
         pos++;
 
-        int length = endToken - startToken;
-        if (length > 0)
+        while ((line[pos] == ' ') || (line[pos] == '\t'))
         {
-            const char *token = line + startToken;
-            if (label && !parsed->label[0])
-            {
-                strncpy_s(parsed->label, sizeof(parsed->label), token, length);
-                parsed->label[length] = 0;
-            }
-            else if (!parsed->op[0])
-            {
-                strncpy_s(parsed->op, sizeof(parsed->op), token, length);
-                parsed->op[length] = 0;
-                if (_stricmp(parsed->op, "DCB") == 0)
-                {
-                    // TODO: parse line data and return as arg1?
-                    assert(!"not implemented");
-                }
-                parsedOp = true;
-            }
-            else if (!parsed->args[0])
-            {
-                strncpy_s(parsed->args, sizeof(parsed->args), token, length);
-                parsed->args[length] = 0;
-            }
-            else
-            {
-                assert(!"unexpected token");
-            }
-
-            startToken = endToken = pos;
-            inToken = false;
+            pos++; 
         }
+
+        start = pos;
+        while ((line[pos] == '_') || ((line[pos] >= 'A') && (line[pos] <= 'Z')) || ((line[pos] >= 'a') && (line[pos] <= 'z')) || ((line[pos] >= '0') && (line[pos] <= '9')))
+        {
+            pos++;
+        }
+        end = pos;
+        strncpy_s(parsed->op, sizeof(parsed->op), &line[start], end - start);
     }
+
+    while ((line[pos] == ' ') || (line[pos] == '\t'))
+    {
+        pos++;
+    }
+
+    start = pos;
+    while ((line[pos] != ';') && (line[pos] != '\n') && (line[pos] != '\r') && (line[pos] != 0))
+    {
+        pos++;
+    }
+    end = pos;
+
+    strncpy_s(parsed->args, sizeof(parsed->args), &line[start], end - start);
 }
 
 struct symbol
@@ -412,7 +397,7 @@ symbol *defines = 0;
 
 symbol *add_symbol(symbol *list, char *text, int start, int end = -1)
 {
-    symbol *s = (symbol *)malloc(sizeof(text));
+    symbol *s = (symbol *)malloc(sizeof(symbol));
     size_t size = strlen(text) + 1;
     s->label = (char *)malloc(size);
     strcpy_s(s->label, size, text);
@@ -444,6 +429,17 @@ int lookup_symbol(symbol *list, const char *text, bool end)
         }
     }
     return INVALID_ADDRESS;
+}
+
+void free_symbols(symbol **list)
+{
+    for (symbol *s = *list, *next = 0; s; s = next)
+    {
+        next = s->next;
+        free(s->label);
+        free(s);
+    }
+    *list = 0;
 }
 
 int lookup(const char *text, bool end)
@@ -576,15 +572,19 @@ address_mode get_address_mode(const char *args, int *ptr_address)
             label_end = true;
             c++;
         }
-        if (ptr_address && *c)
+
+        char lookup_str[64];
+        int lookup_len = 0;
+        while ((lookup_len < 63) && (*c == '_') || ((*c >= 'A') && (*c <= 'Z')) || ((*c >= 'a') && (*c <= 'z')) || ((*c >= '0') && (*c <= '9')))
         {
-            // TODO: actually copy label before lookup
-            address = lookup(c, label_end);
-            assert(address != INVALID_ADDRESS);
+            lookup_str[lookup_len++] = *c++;
         }
-        while ((*c == '_') || ((*c >= 'A') && (*c <= 'Z')) || ((*c >= 'a') && (*c <= 'z')))
+        lookup_str[lookup_len] = 0;
+
+        if (ptr_address && lookup_len)
         {
-            c++;
+            address = lookup(lookup_str, label_end);
+            assert(address != INVALID_ADDRESS);
         }
     }
 
@@ -598,7 +598,7 @@ address_mode get_address_mode(const char *args, int *ptr_address)
         {
             c++;
             _skip_spaces;
-            if (*c == 'y')
+            if ((*c == 'y') || (*c == 'Y'))
             {
                 mode = address_mode_ind_y;
                 *c++;
@@ -610,7 +610,7 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     {
         c++;
         _skip_spaces;
-        if ((*c == 'x') && (mode == address_mode_ind))
+        if (((*c == 'x') || (*c == 'X')) && (mode == address_mode_ind))
         {
             mode = address_mode_ind_x;
             c++;
@@ -618,12 +618,12 @@ address_mode get_address_mode(const char *args, int *ptr_address)
             assert(*c == ')');
             c++;
         }
-        else if ((*c == 'x') && (mode == address_mode_abs))
+        else if (((*c == 'x') || (*c == 'X')) && (mode == address_mode_abs))
         {
             mode = address_mode_abs_x;
             c++;
         }
-        else if ((*c == 'y') && (mode == address_mode_abs))
+        else if (((*c == 'y') || (*c == 'Y')) && (mode == address_mode_abs))
         {
             mode = address_mode_abs_y;
             c++;
@@ -648,16 +648,17 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     return mode;
 }
 
-void index_labels(const char *program)
+void index_labels(const char *program, int size)
 {
     const char *c = program;
+    const char *end = program + size - 1;
     const char *line = c;
     parsed_line parsed;
     int length = 0;
     int address = 0;
-    for (;;)
+    while (c <= end)
     {
-        if (*c == '\n' || *c == '\r' || *c == 0)
+        if ((*c == '\n') || (*c == '\r') || (*c == 0) || (c == end))
         {
             if (length > 0)
             {
@@ -685,17 +686,24 @@ void index_labels(const char *program)
                     {
                         labels = add_symbol(labels, parsed.label, address);
                     }
-                    if (strlen(parsed.op) > 0)
+                    if (_stricmp(parsed.op, "DCB") == 0)
                     {
-                        if (parsed.op[0] == '*')
+                        // TODO: implement
+                    }
+                    else
+                    {
+                        if (strlen(parsed.op) > 0)
                         {
-                            address = parse_value(parsed.args);
-                        }
-                        else
-                        {
-                            // TODO: advance address properly
-                            address_mode mode = get_address_mode(parsed.args, nullptr);
-                            address++;
+                            if (parsed.op[0] == '*')
+                            {
+                                address = parse_value(parsed.args);
+                            }
+                            else
+                            {
+                                // TODO: advance address properly
+                                address_mode mode = get_address_mode(parsed.args, nullptr);
+                                address++;
+                            }
                         }
                     }
                 }
@@ -721,60 +729,70 @@ void index_labels(const char *program)
 
 int translate_instruction(const char *op, address_mode mode, int current_address, int parsed_address, unsigned char *out)
 {
-    for (int id = 0; id < 256; id++)
+    for (int pass = 0; pass < 2; pass++)
     {
-        if (_stricmp(opcodes[id].mnemonic, op) == 0)
+        for (int id = 0; id < 256; id++)
         {
-            // special case: branch instructions have relative addressing
-            if ((opcodes[id].mode == address_mode_rel) && (mode == address_mode_abs))
+            if (_stricmp(opcodes[id].mnemonic, op) == 0)
             {
-                mode = address_mode_rel;
-                parsed_address -= current_address;
-            }
-            else if (parsed_address <= 0xFF)
-            {
-                if (mode == address_mode_abs)
+                address_mode test_mode = mode;
+                // special case: branch instructions have relative addressing
+                if ((opcodes[id].mode == address_mode_rel) && (mode == address_mode_abs))
                 {
-                    mode = address_mode_zp;
+                    test_mode = address_mode_rel;
+                    parsed_address -= current_address;
                 }
-                else if (mode == address_mode_abs_x)
+                else if ((opcodes[id].mode == address_mode_acc) && (mode == address_mode_imp))
                 {
-                    mode = address_mode_zp_x;
+                    test_mode = address_mode_acc;
                 }
-                else if (mode == address_mode_abs_y)
+                else if ((pass == 0) && (parsed_address <= 0xFF))
                 {
-                    mode = address_mode_zp_y;
+                    // check for zp addressing only on first pass
+                    if (mode == address_mode_abs)
+                    {
+                        test_mode = address_mode_zp;
+                    }
+                    else if (mode == address_mode_abs_x)
+                    {
+                        test_mode = address_mode_zp_x;
+                    }
+                    else if (mode == address_mode_abs_y)
+                    {
+                        test_mode = address_mode_zp_y;
+                    }
                 }
-            }
-            if (opcodes[id].mode == mode)
-            {
-                out[0] = id;
-                if (opcodes[id].length == 2)
+                if (opcodes[id].mode == test_mode)
                 {
-                    out[1] = parsed_address & 0xFF;
+                    out[0] = id;
+                    if (opcodes[id].length == 2)
+                    {
+                        out[1] = parsed_address & 0xFF;
+                    }
+                    else if (opcodes[id].length == 3)
+                    {
+                        out[1] = parsed_address & 0xFF;
+                        out[2] = (parsed_address >> 8) & 0xFF;
+                    }
+                    return opcodes[id].length;
                 }
-                else if (opcodes[id].length == 3)
-                {
-                    out[1] = parsed_address & 0xFF;
-                    out[2] = (parsed_address >> 8) & 0xFF;
-                }
-                return opcodes[id].length;
             }
         }
     }
     assert(!"invalid op/mode");
 }
 
-int translate_program(const char *program, unsigned char *bytes)
+int translate_program(const char *program, unsigned char *bytes, int size)
 {
     const char *c = program;
+    const char *end = program + size - 1;
     const char *line = c;
     parsed_line parsed;
     int length = 0;
     int offset = 0;
-    for (;;)
+    while (c <= end)
     {
-        if (*c == '\n' || *c == '\r' || *c == 0)
+        if ((*c == '\n') || (*c == '\r') || (*c == 0) || (c == end))
         {
             if (length > 0)
             {
@@ -785,9 +803,16 @@ int translate_program(const char *program, unsigned char *bytes)
                 }
                 else if (parsed.op[0] != '*' && parsed.op[0])
                 {
-                    int address;
-                    address_mode mode = get_address_mode(parsed.args, &address);
-                    offset += translate_instruction(parsed.op, mode, offset, address, bytes + offset);
+                    if (_stricmp(parsed.op, "DCB") == 0)
+                    {
+                        // TODO: implement
+                    }
+                    else
+                    {
+                        int address;
+                        address_mode mode = get_address_mode(parsed.args, &address);
+                        offset += translate_instruction(parsed.op, mode, offset, address, bytes + offset);
+                    }
                 }
             }
             if (*c == 0)
@@ -806,15 +831,15 @@ int translate_program(const char *program, unsigned char *bytes)
     return offset;
 }
 
-int asm_program(const char *program, unsigned char *bytes)
+int asm_program(const char *program, unsigned char *bytes, int size)
 {
-    index_labels(program);
+    index_labels(program, size);
     printf("\nDEFINES\n=======\n");
     print_symbols(defines);
     printf("\nLABELS\n=======\n");
     print_symbols(labels);
     printf("\nDISASM\n=======\n");
-    return translate_program(program, bytes);
+    return translate_program(program, bytes, size);
 }
 
 void asm_test()
@@ -868,15 +893,67 @@ void asm_test()
 
 #endif
     unsigned char *bytes = (unsigned char *)malloc(0x10000);
-    int size = asm_program(program, bytes);
+    int size = asm_program(program, bytes, sizeof(program) - 1);
     disasm_program(bytes, size, 0x600);
 }
 
 int main(int argc, char *argv[])
 {
+    bool disasm = false;
+    int base_address = 0x600;
+
     init();
 
-    asm_test();
+    unsigned char *out_data = (unsigned char *)malloc(0x10000);
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (argv[i][0] == '-' && argv[i][1] == 'd')
+        {
+            disasm = true;
+        }
+        else if (argv[i][0] == '-' && argv[i][1] == 'b')
+        {
+            base_address = parse_value(&argv[i][2]);
+        }
+        else
+        {
+            FILE *f;
+            fopen_s(&f, argv[i], "rb");
+            if (f)
+            {
+                printf("Processing file: %s\n", argv[i]);
+                free_symbols(&labels);
+                free_symbols(&defines);
+                assert(labels == 0);
+                assert(defines == 0);
+
+                fseek(f, 0, SEEK_END);
+                int input_size = ftell(f);
+                unsigned char *input_data = (unsigned char *)malloc(input_size);
+
+                fseek(f, 0, SEEK_SET);
+                fread((void *)input_data, input_size, 1, f);
+                fclose(f);
+
+                if (!disasm)
+                {
+                    int out_size = asm_program((const char *)input_data, out_data, input_size);
+                    disasm_program(out_data, out_size, base_address);
+                }
+                else
+                {
+                    disasm_program(input_data, input_size, base_address);
+                }
+
+                free(input_data);
+            }
+            else
+            {
+                printf("Error opening file: %s\n", argv[i]);
+            }
+        }
+    }
 
     system("pause");
     return 0;
