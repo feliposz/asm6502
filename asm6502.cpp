@@ -48,31 +48,31 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
     unsigned int word = (bytes[offset + 2] << 8) | (bytes[offset + 1] & 0xff);
     unsigned int rel = offset + base_address + (signed char)byte;
 
-    printf("%04X    ", address);
+    printf("$%04x    ", address);
 
     if (opcodes[id].length == 3)
     {
-        printf("%02X %02X %02X    ", bytes[offset], bytes[offset + 1], bytes[offset + 2]);
+        printf("%02x %02x %02x  ", bytes[offset], bytes[offset + 1], bytes[offset + 2]);
     }
     else if (opcodes[id].length == 2)
     {
-        printf("%02X %02X       ", bytes[offset], bytes[offset + 1]);
+        printf("%02x %02x     ", bytes[offset], bytes[offset + 1]);
     }
     else
     {
-        printf("%02X          ", bytes[offset]);
+        printf("%02x        ", bytes[offset]);
     }
 
     switch (mode)
     {
         case address_mode_abs:
-            printf("%s $%04X\n", mnemonic, word);
+            printf("%s $%04x\n", mnemonic, word);
             break;
         case address_mode_abs_x:
-            printf("%s $%04X,X\n", mnemonic, word);
+            printf("%s $%04x,X\n", mnemonic, word);
             break;
         case address_mode_abs_y:
-            printf("%s $%04X,Y\n", mnemonic, word);
+            printf("%s $%04x,Y\n", mnemonic, word);
             break;
         case address_mode_imp:
             printf("%s\n", mnemonic);
@@ -81,28 +81,28 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
             printf("%s A\n", mnemonic);
             break;
         case address_mode_imm:
-            printf("%s #$%02X\n", mnemonic, byte);
+            printf("%s #$%02x\n", mnemonic, byte);
             break;
         case address_mode_ind:
-            printf("%s ($%04X)\n", mnemonic, word);
+            printf("%s ($%04x)\n", mnemonic, word);
             break;
         case address_mode_ind_x:
-            printf("%s ($%02X,X)\n", mnemonic, byte);
+            printf("%s ($%02x,X)\n", mnemonic, byte);
             break;
         case address_mode_ind_y:
-            printf("%s ($%02X),Y\n", mnemonic, byte);
+            printf("%s ($%02x),Y\n", mnemonic, byte);
             break;
         case address_mode_rel:
-            printf("%s $%04X\n", mnemonic, rel);
+            printf("%s $%04x\n", mnemonic, rel);
             break;
         case address_mode_zp:
-            printf("%s $%02X\n", mnemonic, byte);
+            printf("%s $%02x\n", mnemonic, byte);
             break;
         case address_mode_zp_x:
-            printf("%s $%02X,X\n", mnemonic, byte);
+            printf("%s $%02x,X\n", mnemonic, byte);
             break;
         case address_mode_zp_y:
-            printf("%s $%02X,Y\n", mnemonic, byte);
+            printf("%s $%02x,Y\n", mnemonic, byte);
             break;
         default:
             assert(!"invalid code path");
@@ -114,9 +114,10 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
 
 void disasm_program(unsigned char *bytes, int size, int base_address)
 {
+    printf("\nDISASM\n=======\n");
     for (int offset = 0; offset < size; )
     {
-        offset += disasm_single(bytes, offset, 0x600);
+        offset += disasm_single(bytes + base_address, offset, base_address);
     }
 }
 
@@ -385,8 +386,7 @@ void parse_line(const char *line, int length, parsed_line *parsed)
 struct symbol
 {
     char *label;
-    int start;
-    int end;
+    int offset;
     symbol *next;
 };
 
@@ -395,37 +395,26 @@ symbol *defines = 0;
 
 // TODO: check for duplicate labels
 
-symbol *add_symbol(symbol *list, char *text, int start, int end = -1)
+symbol *add_symbol(symbol *list, char *text, int offset)
 {
     symbol *s = (symbol *)malloc(sizeof(symbol));
     size_t size = strlen(text) + 1;
     s->label = (char *)malloc(size);
     strcpy_s(s->label, size, text);
-    s->start = start;
-    if (end >= 0)
-    {
-        s->end = end;
-    }
-    else
-    {
-        if (list)
-        {
-            list->end = start - 1; // set end offset of previous label
-        }
-    }
+    s->offset = offset;
     s->next = list;
     return s;
 }
 
-#define INVALID_ADDRESS 0xDEADFF
+#define INVALID_ADDRESS 0xFFFFF
 
-int lookup_symbol(symbol *list, const char *text, bool end)
+int lookup_symbol(symbol *list, const char *text)
 {
     for (symbol *s = list; s; s = s->next)
     {
         if (_stricmp(text, s->label) == 0)
         {
-            return end ? s->end : s->start;
+            return s->offset;
         }
     }
     return INVALID_ADDRESS;
@@ -442,12 +431,12 @@ void free_symbols(symbol **list)
     *list = 0;
 }
 
-int lookup(const char *text, bool end)
+int lookup(const char *text)
 {
-    int address = lookup_symbol(defines, text, end);
+    int address = lookup_symbol(defines, text);
     if (address == INVALID_ADDRESS)
     {
-        address = lookup_symbol(labels, text, end);
+        address = lookup_symbol(labels, text);
     }
     return address;
 }
@@ -456,7 +445,7 @@ void print_symbols(symbol *list)
 {
     for (symbol *s = list; s; s = s->next)
     {
-        printf("%04x-%04x    %s\n", s->start, s->end, s->label);
+        printf("%04x    %s\n", s->offset, s->label);
     }
 }
 
@@ -562,14 +551,16 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     }
     else
     {
-        bool label_end = false;
+        bool label_lo = false;
+        bool label_hi = false;
         if (*c == '<')
         {
+            label_lo = true;
             c++;
         }
         else if (*c == '>')
         {
-            label_end = true;
+            label_hi = true;
             c++;
         }
 
@@ -581,10 +572,17 @@ address_mode get_address_mode(const char *args, int *ptr_address)
         }
         lookup_str[lookup_len] = 0;
 
-        if (ptr_address && lookup_len)
+        if (lookup_len)
         {
-            address = lookup(lookup_str, label_end);
-            assert(address != INVALID_ADDRESS);
+            address = lookup(lookup_str);
+            if (label_lo)
+            {
+                address = address & 0xFF;
+            }
+            else if (label_hi)
+            {
+                address = (address >> 8) & 0xFF;
+            }
         }
     }
 
@@ -639,7 +637,6 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     assert(*c == 0);
 
     assert(mode != address_mode_undef);
-    assert(address <= 0xFFFF);
 
     if (ptr_address)
     {
@@ -648,83 +645,36 @@ address_mode get_address_mode(const char *args, int *ptr_address)
     return mode;
 }
 
-void index_labels(const char *program, int size)
+int translate_dcb(const char *args, unsigned char *out)
 {
-    const char *c = program;
-    const char *end = program + size - 1;
-    const char *line = c;
-    parsed_line parsed;
+    int pos = 0;
     int length = 0;
-    int address = 0;
-    while (c <= end)
+
+    for (;;)
     {
-        if ((*c == '\n') || (*c == '\r') || (*c == 0) || (c == end))
+        while ((args[pos] == ' ') || (args[pos] == '\t'))
         {
-            if (length > 0)
-            {
-                parse_line(line, length, &parsed);
-                if (_stricmp(parsed.op, "DEFINE") == 0)
-                {
-                    // special case, split symbol and value
-                    int pos = 0;
-                    int len = strlen(parsed.args);
-                    for (int i = 0; i < len; i++)
-                    {
-                        if ((parsed.args[i] == ' ') || (parsed.args[i] == '\t'))
-                        {
-                            pos = i;
-                            break;
-                        }
-                    }
-                    int value = parse_value(parsed.args + pos + 1);
-                    parsed.args[pos] = 0;
-                    defines = add_symbol(defines, parsed.args, value, value);
-                }
-                else
-                {
-                    if (strlen(parsed.label) > 0)
-                    {
-                        labels = add_symbol(labels, parsed.label, address);
-                    }
-                    if (_stricmp(parsed.op, "DCB") == 0)
-                    {
-                        // TODO: implement
-                    }
-                    else
-                    {
-                        if (strlen(parsed.op) > 0)
-                        {
-                            if (parsed.op[0] == '*')
-                            {
-                                address = parse_value(parsed.args);
-                            }
-                            else
-                            {
-                                // TODO: advance address properly
-                                address_mode mode = get_address_mode(parsed.args, nullptr);
-                                address++;
-                            }
-                        }
-                    }
-                }
-            }
-            if (*c == 0)
-            {
-                break;
-            }
-            line = c + 1;
-            length = 0;
+            pos++;
         }
-        else
+
+        out[length++] = parse_value(args + pos);
+
+        while ((args[pos] != ',') && (args[pos] != '\n') && (args[pos] != 0))
         {
-            length++;
+            pos++;
         }
-        c++;
+
+        if ((args[pos] == '\n') || (args[pos] == 0))
+        {
+            break;
+        }
+        else if (args[pos] == ',')
+        {
+            pos++;
+        }
     }
-    if (labels)
-    {
-        labels->end = address;
-    }
+
+    return length;
 }
 
 int translate_instruction(const char *op, address_mode mode, int current_address, int parsed_address, unsigned char *out)
@@ -782,64 +732,98 @@ int translate_instruction(const char *op, address_mode mode, int current_address
     assert(!"invalid op/mode");
 }
 
-int translate_program(const char *program, unsigned char *bytes, int size)
+int translate_program(const char *program, unsigned char *bytes, int size, int base_address)
 {
-    const char *c = program;
-    const char *end = program + size - 1;
-    const char *line = c;
-    parsed_line parsed;
-    int length = 0;
+    // do 2 passes:
+    // 1) index labels
+    // 2) actually do translation
     int offset = 0;
-    while (c <= end)
+    for (int pass = 0; pass < 2; pass++)
     {
-        if ((*c == '\n') || (*c == '\r') || (*c == 0) || (c == end))
+        const char *c = program;
+        const char *end = program + size - 1;
+        const char *line = c;
+        parsed_line parsed;
+        int length = 0;
+        offset = base_address;
+        while (c <= end)
         {
-            if (length > 0)
+            if ((*c == '\n') || (*c == '\r') || (*c == 0) || (c == end))
             {
-                parse_line(line, length, &parsed);
-                if (_stricmp(parsed.op, "DEFINE") == 0)
+                if (length > 0)
                 {
-                    // skip
+                    parse_line(line, length, &parsed);
+                    if (strlen(parsed.label) > 0)
+                    {
+                        if (pass == 0)
+                        {
+                            labels = add_symbol(labels, parsed.label, offset);
+                        }
+                    }
+                    if (_stricmp(parsed.op, "DEFINE") == 0)
+                    {
+                        if (pass == 0)
+                        {
+                            // special case, split symbol and value
+                            int pos = 0;
+                            int len = strlen(parsed.args);
+                            for (int i = 0; i < len; i++)
+                            {
+                                if ((parsed.args[i] == ' ') || (parsed.args[i] == '\t'))
+                                {
+                                    pos = i;
+                                    break;
+                                }
+                            }
+                            int value = parse_value(parsed.args + pos + 1);
+                            parsed.args[pos] = 0;
+                            defines = add_symbol(defines, parsed.args, value);
+                        }
+                    }
+                    else if (parsed.op[0])
+                    {
+                        if (_stricmp(parsed.op, "DCB") == 0)
+                        {
+                            // TODO: implement
+                            offset += translate_dcb(parsed.args, bytes + offset);
+                        }
+                        else if (parsed.op[0] == '*')
+                        {
+                            offset = parse_value(parsed.args);
+                        }
+                        else
+                        {
+                            int address = 0;
+                            address_mode mode = get_address_mode(parsed.args, &address);
+                            offset += translate_instruction(parsed.op, mode, offset, address, bytes + offset);
+                        }
+                    }
                 }
-                else if (parsed.op[0] != '*' && parsed.op[0])
+                if (*c == 0)
                 {
-                    if (_stricmp(parsed.op, "DCB") == 0)
-                    {
-                        // TODO: implement
-                    }
-                    else
-                    {
-                        int address;
-                        address_mode mode = get_address_mode(parsed.args, &address);
-                        offset += translate_instruction(parsed.op, mode, offset, address, bytes + offset);
-                    }
+                    break;
                 }
+                line = c + 1;
+                length = 0;
             }
-            if (*c == 0)
+            else
             {
-                break;
+                length++;
             }
-            line = c + 1;
-            length = 0;
+            c++;
         }
-        else
-        {
-            length++;
-        }
-        c++;
     }
     return offset;
 }
 
-int asm_program(const char *program, unsigned char *bytes, int size)
+int asm_program(const char *program, unsigned char *bytes, int size, int base_address)
 {
-    index_labels(program, size);
+    int byte_size = translate_program(program, bytes, size, base_address);
     printf("\nDEFINES\n=======\n");
     print_symbols(defines);
     printf("\nLABELS\n=======\n");
     print_symbols(labels);
-    printf("\nDISASM\n=======\n");
-    return translate_program(program, bytes, size);
+    return byte_size;
 }
 
 void asm_test()
@@ -893,7 +877,7 @@ void asm_test()
 
 #endif
     unsigned char *bytes = (unsigned char *)malloc(0x10000);
-    int size = asm_program(program, bytes, sizeof(program) - 1);
+    int size = asm_program(program, bytes, sizeof(program) - 1, 0x600);
     disasm_program(bytes, size, 0x600);
 }
 
@@ -938,7 +922,7 @@ int main(int argc, char *argv[])
 
                 if (!disasm)
                 {
-                    int out_size = asm_program((const char *)input_data, out_data, input_size);
+                    int out_size = asm_program((const char *)input_data, out_data, input_size, base_address);
                     disasm_program(out_data, out_size, base_address);
                 }
                 else
@@ -952,6 +936,7 @@ int main(int argc, char *argv[])
             {
                 printf("Error opening file: %s\n", argv[i]);
             }
+            break; // TEST: first program only
         }
     }
 
