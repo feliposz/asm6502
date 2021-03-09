@@ -37,7 +37,7 @@ inline void init_opcode(int id, const char *mnemonic, int length, address_mode m
     opcodes[id].mode = mode;
 }
 
-int disasm_single(unsigned char *bytes, int offset, int base_address)
+int disasm_single(unsigned char *bytes, int offset, int base_address, FILE *file)
 {
     int id = bytes[offset];
     const char *mnemonic = opcodes[id].mnemonic;
@@ -46,63 +46,63 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
     unsigned int address = offset + base_address;
     unsigned int byte = bytes[offset + 1];
     unsigned int word = (bytes[offset + 2] << 8) | (bytes[offset + 1] & 0xff);
-    unsigned int rel = offset + base_address + (signed char)byte;
+    unsigned int rel = offset + base_address + 2 + (signed char)byte;
 
-    printf("$%04x    ", address);
+    fprintf(file, "$%04x    ", address);
 
     if (opcodes[id].length == 3)
     {
-        printf("%02x %02x %02x  ", bytes[offset], bytes[offset + 1], bytes[offset + 2]);
+        fprintf(file, "%02x %02x %02x  ", bytes[offset], bytes[offset + 1], bytes[offset + 2]);
     }
     else if (opcodes[id].length == 2)
     {
-        printf("%02x %02x     ", bytes[offset], bytes[offset + 1]);
+        fprintf(file, "%02x %02x     ", bytes[offset], bytes[offset + 1]);
     }
     else
     {
-        printf("%02x        ", bytes[offset]);
+        fprintf(file, "%02x        ", bytes[offset]);
     }
 
     switch (mode)
     {
         case address_mode_abs:
-            printf("%s $%04x\n", mnemonic, word);
+            fprintf(file, "%s $%04x\n", mnemonic, word);
             break;
         case address_mode_abs_x:
-            printf("%s $%04x,X\n", mnemonic, word);
+            fprintf(file, "%s $%04x,X\n", mnemonic, word);
             break;
         case address_mode_abs_y:
-            printf("%s $%04x,Y\n", mnemonic, word);
+            fprintf(file, "%s $%04x,Y\n", mnemonic, word);
             break;
         case address_mode_imp:
-            printf("%s\n", mnemonic);
+            fprintf(file, "%s\n", mnemonic);
             break;
         case address_mode_acc:
-            printf("%s A\n", mnemonic);
+            fprintf(file, "%s A\n", mnemonic);
             break;
         case address_mode_imm:
-            printf("%s #$%02x\n", mnemonic, byte);
+            fprintf(file, "%s #$%02x\n", mnemonic, byte);
             break;
         case address_mode_ind:
-            printf("%s ($%04x)\n", mnemonic, word);
+            fprintf(file, "%s ($%04x)\n", mnemonic, word);
             break;
         case address_mode_ind_x:
-            printf("%s ($%02x,X)\n", mnemonic, byte);
+            fprintf(file, "%s ($%02x,X)\n", mnemonic, byte);
             break;
         case address_mode_ind_y:
-            printf("%s ($%02x),Y\n", mnemonic, byte);
+            fprintf(file, "%s ($%02x),Y\n", mnemonic, byte);
             break;
         case address_mode_rel:
-            printf("%s $%04x\n", mnemonic, rel);
+            fprintf(file, "%s $%04x\n", mnemonic, rel);
             break;
         case address_mode_zp:
-            printf("%s $%02x\n", mnemonic, byte);
+            fprintf(file, "%s $%02x\n", mnemonic, byte);
             break;
         case address_mode_zp_x:
-            printf("%s $%02x,X\n", mnemonic, byte);
+            fprintf(file, "%s $%02x,X\n", mnemonic, byte);
             break;
         case address_mode_zp_y:
-            printf("%s $%02x,Y\n", mnemonic, byte);
+            fprintf(file, "%s $%02x,Y\n", mnemonic, byte);
             break;
         default:
             assert(!"invalid code path");
@@ -112,12 +112,13 @@ int disasm_single(unsigned char *bytes, int offset, int base_address)
     return opcodes[id].length;
 }
 
-void disasm_program(unsigned char *bytes, int size, int base_address)
+void disasm_program(unsigned char *bytes, int size, int base_address, FILE *file)
 {
-    printf("\nDISASM\n=======\n");
+    fprintf(file, "Address  Hexdump   Dissassembly\n");
+    fprintf(file, "-------------------------------\n");
     for (int offset = 0; offset < size; )
     {
-        offset += disasm_single(bytes + base_address, offset, base_address);
+        offset += disasm_single(bytes + base_address, offset, base_address, file);
     }
 }
 
@@ -170,6 +171,7 @@ void init()
     init_opcode(0xD6, "DEC", 2, address_mode_zp_x);
     init_opcode(0xCE, "DEC", 3, address_mode_abs);
     init_opcode(0xDE, "DEC", 3, address_mode_abs_x);
+    init_opcode(0x42, "WDM", 2, address_mode_imm); // 65C816
     init_opcode(0x49, "EOR", 2, address_mode_imm);
     init_opcode(0x45, "EOR", 2, address_mode_zp);
     init_opcode(0x55, "EOR", 2, address_mode_zp_x);
@@ -295,7 +297,7 @@ void disasm_test()
     //unsigned char example[] = { 0x20, 0x06, 0x06, 0x20, 0x38, 0x06, 0x20, 0x0d, 0x06, 0x20, 0x2a, 0x06, 0x60, 0xa9, 0x02, 0x85, 0x02, 0xa9, 0x04, 0x85, 0x03, 0xa9, 0x11, 0x85, 0x10, 0xa9, 0x10, 0x85, 0x12, 0xa9, 0x0f, 0x85, 0x14, 0xa9, 0x04, 0x85, 0x11, 0x85, 0x13, 0x85, 0x15, 0x60, 0xa5, 0xfe, 0x85, 0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01, 0x60, 0x20, 0x4d, 0x06, 0x20, 0x8d, 0x06, 0x20, 0xc3, 0x06, 0x20, 0x19, 0x07, 0x20, 0x20, 0x07, 0x20, 0x2d, 0x07, 0x4c, 0x38, 0x06, 0xa5, 0xff, 0xc9, 0x77, 0xf0, 0x0d, 0xc9, 0x64, 0xf0, 0x14, 0xc9, 0x73, 0xf0, 0x1b, 0xc9, 0x61, 0xf0, 0x22, 0x60, 0xa9, 0x04, 0x24, 0x02, 0xd0, 0x26, 0xa9, 0x01, 0x85, 0x02, 0x60, 0xa9, 0x08, 0x24, 0x02, 0xd0, 0x1b, 0xa9, 0x02, 0x85, 0x02, 0x60, 0xa9, 0x01, 0x24, 0x02, 0xd0, 0x10, 0xa9, 0x04, 0x85, 0x02, 0x60, 0xa9, 0x02, 0x24, 0x02, 0xd0, 0x05, 0xa9, 0x08, 0x85, 0x02, 0x60, 0x60, 0x20, 0x94, 0x06, 0x20, 0xa8, 0x06, 0x60, 0xa5, 0x00, 0xc5, 0x10, 0xd0, 0x0d, 0xa5, 0x01, 0xc5, 0x11, 0xd0, 0x07, 0xe6, 0x03, 0xe6, 0x03, 0x20, 0x2a, 0x06, 0x60, 0xa2, 0x02, 0xb5, 0x10, 0xc5, 0x10, 0xd0, 0x06, 0xb5, 0x11, 0xc5, 0x11, 0xf0, 0x09, 0xe8, 0xe8, 0xe4, 0x03, 0xf0, 0x06, 0x4c, 0xaa, 0x06, 0x4c, 0x35, 0x07, 0x60, 0xa6, 0x03, 0xca, 0x8a, 0xb5, 0x10, 0x95, 0x12, 0xca, 0x10, 0xf9, 0xa5, 0x02, 0x4a, 0xb0, 0x09, 0x4a, 0xb0, 0x19, 0x4a, 0xb0, 0x1f, 0x4a, 0xb0, 0x2f, 0xa5, 0x10, 0x38, 0xe9, 0x20, 0x85, 0x10, 0x90, 0x01, 0x60, 0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11, 0xf0, 0x28, 0x60, 0xe6, 0x10, 0xa9, 0x1f, 0x24, 0x10, 0xf0, 0x1f, 0x60, 0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10, 0xb0, 0x01, 0x60, 0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, 0xf0, 0x0c, 0x60, 0xc6, 0x10, 0xa5, 0x10, 0x29, 0x1f, 0xc9, 0x1f, 0xf0, 0x01, 0x60, 0x4c, 0x35, 0x07, 0xa0, 0x00, 0xa5, 0xfe, 0x91, 0x00, 0x60, 0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10, 0x60, 0xa2, 0x00, 0xea, 0xea, 0xca, 0xd0, 0xfb, 0x60 };
     unsigned char example[] = { 0x20, 0x06, 0x06, 0x20, 0x37, 0x06, 0x20, 0x0d, 0x06, 0x20, 0x2a, 0x06, 0x60, 0xa9, 0x02, 0x85, 0x02, 0xa9, 0x04, 0x85, 0x03, 0xa9, 0x11, 0x85, 0x10, 0xa9, 0x10, 0x85, 0x12, 0xa9, 0x0f, 0x85, 0x14, 0xa9, 0x04, 0x85, 0x11, 0x85, 0x13, 0x85, 0x15, 0x60, 0xa5, 0xfe, 0x85, 0x00, 0xa5, 0xfe, 0x29, 0x03, 0x18, 0x69, 0x02, 0x85, 0x01, 0x20, 0x57, 0x06, 0x20, 0x43, 0x06, 0x20, 0x4a, 0x06, 0x4c, 0x37, 0x06, 0xa0, 0x00, 0xa5, 0xfe, 0x91, 0x00, 0x60, 0xa6, 0x03, 0xa9, 0x00, 0x81, 0x10, 0xa2, 0x00, 0xa9, 0x01, 0x81, 0x10, 0x60, 0xa6, 0x03, 0xca, 0x8a, 0xb5, 0x10, 0x95, 0x12, 0xca, 0x10, 0xf9, 0xa5, 0x02, 0x4a, 0xb0, 0x09, 0x4a, 0xb0, 0x19, 0x4a, 0xb0, 0x1f, 0x4a, 0xb0, 0x2f, 0xa5, 0x10, 0x38, 0xe9, 0x20, 0x85, 0x10, 0x90, 0x01, 0x60, 0xc6, 0x11, 0xa9, 0x01, 0xc5, 0x11, 0xf0, 0x26, 0x60, 0xe6, 0x10, 0xa9, 0x1f, 0x24, 0x10, 0xf0, 0x1d, 0x60, 0xa5, 0x10, 0x18, 0x69, 0x20, 0x85, 0x10, 0xb0, 0x01, 0x60, 0xe6, 0x11, 0xa9, 0x06, 0xc5, 0x11, 0xf0, 0x0a, 0x60, 0xc6, 0x10, 0xa9, 0x1f, 0x25, 0x10, 0xf0, 0x01, 0x60, 0x4c, 0xab, 0x06 };
 
-    disasm_program(example, sizeof(example), 0x600);
+    disasm_program(example, sizeof(example), 0x600, stdout);
 }
 
 struct parsed_line
@@ -657,7 +659,10 @@ int translate_dcb(const char *args, unsigned char *out)
             pos++;
         }
 
-        out[length++] = parse_value(args + pos);
+        if (args[pos] != 0)
+        {
+            out[length++] = parse_value(args + pos);
+        }
 
         while ((args[pos] != ',') && (args[pos] != '\n') && (args[pos] != 0))
         {
@@ -690,7 +695,7 @@ int translate_instruction(const char *op, address_mode mode, int current_address
                 if ((opcodes[id].mode == address_mode_rel) && (mode == address_mode_abs))
                 {
                     test_mode = address_mode_rel;
-                    parsed_address -= current_address;
+                    parsed_address = parsed_address - current_address - 2;
                 }
                 else if ((opcodes[id].mode == address_mode_acc) && (mode == address_mode_imp))
                 {
@@ -775,8 +780,13 @@ int translate_program(const char *program, unsigned char *bytes, int size, int b
                                     break;
                                 }
                             }
-                            int value = parse_value(parsed.args + pos + 1);
                             parsed.args[pos] = 0;
+                            pos++;
+                            while ((parsed.args[pos] == ' ') || (parsed.args[pos] == '\t'))
+                            {
+                                pos++;
+                            }
+                            int value = parse_value(parsed.args + pos);
                             defines = add_symbol(defines, parsed.args, value);
                         }
                     }
@@ -813,16 +823,18 @@ int translate_program(const char *program, unsigned char *bytes, int size, int b
             c++;
         }
     }
-    return offset;
+    return offset - base_address;
 }
 
 int asm_program(const char *program, unsigned char *bytes, int size, int base_address)
 {
     int byte_size = translate_program(program, bytes, size, base_address);
+#if 0
     printf("\nDEFINES\n=======\n");
     print_symbols(defines);
     printf("\nLABELS\n=======\n");
     print_symbols(labels);
+#endif
     return byte_size;
 }
 
@@ -878,7 +890,7 @@ void asm_test()
 #endif
     unsigned char *bytes = (unsigned char *)malloc(0x10000);
     int size = asm_program(program, bytes, sizeof(program) - 1, 0x600);
-    disasm_program(bytes, size, 0x600);
+    disasm_program(bytes, size, 0x600, stdout);
 }
 
 int main(int argc, char *argv[])
@@ -888,7 +900,8 @@ int main(int argc, char *argv[])
 
     init();
 
-    unsigned char *out_data = (unsigned char *)malloc(0x10000);
+    int out_buffer_size = 0x10000;
+    unsigned char *out_data = (unsigned char *)malloc(out_buffer_size);
 
     for (int i = 1; i < argc; i++)
     {
@@ -902,9 +915,10 @@ int main(int argc, char *argv[])
         }
         else
         {
-            FILE *f;
-            fopen_s(&f, argv[i], "rb");
-            if (f)
+            FILE *f_in;
+            fopen_s(&f_in, argv[i], "rb");
+            
+            if (f_in)
             {
                 printf("Processing file: %s\n", argv[i]);
                 free_symbols(&labels);
@@ -912,34 +926,52 @@ int main(int argc, char *argv[])
                 assert(labels == 0);
                 assert(defines == 0);
 
-                fseek(f, 0, SEEK_END);
-                int input_size = ftell(f);
+                fseek(f_in, 0, SEEK_END);
+                int input_size = ftell(f_in);
                 unsigned char *input_data = (unsigned char *)malloc(input_size);
 
-                fseek(f, 0, SEEK_SET);
-                fread((void *)input_data, input_size, 1, f);
-                fclose(f);
+                fseek(f_in, 0, SEEK_SET);
+                fread((void *)input_data, input_size, 1, f_in);
+                fclose(f_in);
 
                 if (!disasm)
                 {
+                    memset(out_data, 0, out_buffer_size);
                     int out_size = asm_program((const char *)input_data, out_data, input_size, base_address);
-                    disasm_program(out_data, out_size, base_address);
+
+                    FILE *f_out;
+                    char outname[100] = "../disasm/";
+                    strcat_s(outname, argv[i]);
+                    int len = strnlen_s(outname, sizeof(outname));
+                    outname[len - 3] = 0;
+                    strcat_s(outname, "disasm");
+
+                    printf("Writing to file: %s\n", outname);
+                    fopen_s(&f_out, outname, "wb");
+                    if (f_out)
+                    {
+                        disasm_program(out_data, out_size, base_address, f_out);
+                        fclose(f_out);
+                    }
+                    else
+                    {
+                        printf("Error opening output file: %s\n", outname);
+                    }
                 }
                 else
                 {
-                    disasm_program(input_data, input_size, base_address);
+                    disasm_program(input_data, input_size, base_address, stdout);
                 }
 
                 free(input_data);
             }
             else
             {
-                printf("Error opening file: %s\n", argv[i]);
+                printf("Error opening input file: %s\n", argv[i]);
             }
-            break; // TEST: first program only
         }
     }
 
-    system("pause");
+    //system("pause");
     return 0;
 }
